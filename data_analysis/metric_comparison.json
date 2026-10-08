@@ -1,0 +1,7 @@
+{
+    "total_queries_tested": 1000,
+    "exact_list_match_rate": 0.011,
+    "average_jaccard_similarity": 0.8347106227106301,
+    "order_only_mismatches": 0.26,
+    "top_10_set_divergence_rate": 0.729
+}

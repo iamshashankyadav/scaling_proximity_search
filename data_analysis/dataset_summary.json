@@ -1,0 +1,41 @@
+{
+    "total_rows": 10000,
+    "columns": [
+        "ID",
+        "Latitude",
+        "Longitude",
+        "Category"
+    ],
+    "missing_values": {
+        "ID": 0,
+        "Latitude": 0,
+        "Longitude": 0,
+        "Category": 0
+    },
+    "id_min": 1,
+    "id_max": 10000,
+    "id_unique_count": 10000,
+    "latitude_unique_count": 100,
+    "longitude_unique_count": 100,
+    "latitude_min": 0.0,
+    "latitude_max": 1.0,
+    "longitude_min": 0.0,
+    "longitude_max": 1.0,
+    "lat_diff_min": 0.010100999999999916,
+    "lat_diff_max": 0.010102000000000055,
+    "long_diff_min": 0.010100999999999916,
+    "long_diff_max": 0.010102000000000055,
+    "duplicate_coordinate_pairs": 0,
+    "categories": {
+        "bank": 1250,
+        "store": 1250,
+        "pharmacy": 1250,
+        "hospital": 1250,
+        "school": 1250,
+        "restaurant": 1250,
+        "park": 1250,
+        "cafe": 1250
+    },
+    "ids_sequential_1_to_10000": true,
+    "row_col_matches_id": true
+}
