@@ -1,1 +1,4 @@
 plane.md
+__pycache__/
+*.pyc
+
