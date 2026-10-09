@@ -1,0 +1,19 @@
+{
+    "total_link_records": 14800,
+    "unique_undirected_edges": 14800,
+    "complete_grid_max_edges": 19800,
+    "missing_roads_count": 5000,
+    "road_retention_ratio": 0.7474747474747475,
+    "degree_min": 1,
+    "degree_max": 4,
+    "degree_mean": 2.96,
+    "degree_distribution": {
+        "0": 0,
+        "1": 111,
+        "2": 2601,
+        "3": 4865,
+        "4": 2423
+    },
+    "connected_components_count": 1,
+    "largest_component_size": 10000
+}

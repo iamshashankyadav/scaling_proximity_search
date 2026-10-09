@@ -4,9 +4,7 @@ import pandas as pd
 import numpy as np
 
 os.makedirs('data_analysis', exist_ok=True)
-
 df = pd.read_csv('locations - locations.csv')
-
 # Basic Analysis
 analysis = {}
 analysis['total_rows'] = len(df)
