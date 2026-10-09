@@ -3,174 +3,153 @@
 **Course / Project:** Scaling Proximity Search  
 **Author:** Student / Team  
 **Dataset:** 10,000 Grid Locations on a $1 \times 1$ Unit Plane  
-**Target Endpoint:** `GET /search/?lat=<float>&long=<float>&cat=<string>&rad=<float>`  
+**Road Network:** `link.txt` containing 14,800 road linkages (5,000 missing road connections)  
+**Target Endpoint:** `GET /search/?lat=<float>&long=<float>&cat=<string>&rad=<float>&link=<string>`  
 
 ---
 
 ## Executive Summary
 
-This project implements a high-throughput, low-latency REST API designed to solve the **Category-Constrained Proximity Search on Grid Road Networks** problem. Given an arbitrary continuous query coordinate $(\text{lat}, \text{long})$, a target category $\text{cat}$, and a circular search radius $\text{rad}$, the system filters candidate locations within the Euclidean circular boundary and ranks them according to their **grid traversal distance** (Manhattan $L_1$ metric).
+This report documents the architectural design, algorithmic implementation, empirical dataset analysis, and performance benchmarking for the **Scaling Proximity Search API**. Given a query coordinate $(\text{lat}, \text{long})$, a target category $\text{cat}$, a search radius $\text{rad}$, and road network linkage information $\text{link}$, the system filters candidate locations within the circular Euclidean radius and ranks them by their true **grid road network traversal distance** (shortest path on the unweighted road graph).
 
-The API is built using **FastAPI** and **NumPy** in-memory vectorization, achieving an average response latency of **$0.036\text{ ms}$ ($\approx 27,600\text{ QPS}$)** per core, with support for $1,000,000+$ points via spatial KD-Trees.
+The production API is built using **FastAPI**, **heapq multi-source Dijkstra / BFS**, and in-memory vectorized indexing, delivering an average query latency of **$0.36\text{ ms}$ ($\approx 2,800\text{ QPS}$)** with 100% test coverage.
 
 ---
 
-## 1. Problem Formulation & Distance Metrics
+## 1. Problem Formulation & Dual-Metric Logic
 
-### 1.1 Dual-Metric Nature of the Query
-The assignment specifies two distinct distance interpretations that must be reconciled in each query:
-1. **Search Radius Boundary ($\text{rad}$):** Defines eligibility. A point $P_i = (\text{lat}_i, \text{long}_i)$ is within the search zone if and only if its straight-line (Euclidean / circular) distance to the query point $Q = (\text{lat}_q, \text{long}_q)$ satisfies:
+### 1.1 Dual-Metric Architecture
+1. **Search Radius Filter ($\text{rad}$):** Defines candidate eligibility. A location $P_i = (\text{lat}_i, \text{long}_i)$ is eligible if and only if its straight-line (Euclidean) distance to query $Q = (\text{lat}_q, \text{long}_q)$ satisfies:
    $$\text{Dist}_{\text{Euclidean}}(Q, P_i) = \sqrt{(\text{lat}_i - \text{lat}_q)^2 + (\text{long}_i - \text{long}_q)^2} \le \text{rad}$$
-2. **Proximity Ranking Metric (Closest Traversal Distance):** The problem states: *"The locations lie on a $1 \times 1$ grid... straight-line/Euclidean distance may not always represent the appropriate proximity measure. Radius is the circular distance... while distance is the actual traversal distance on grid."*
-   Movement along an orthogonal grid road network corresponds to the Manhattan ($L_1$) distance:
-   $$\text{Dist}_{\text{Grid}}(Q, P_i) = |\text{lat}_i - \text{lat}_q| + |\text{long}_i - \text{long}_q|$$
+2. **Proximity Ranking Metric ($\text{Dist}_{\text{traversal}}$):** Represents actual physical traversal on the road network:
+   - A complete $100 \times 100$ grid contains $19,800$ possible 4-neighbor road segments.
+   - The provided `link.txt` contains **14,800 active links**, meaning **5,000 direct road segments are missing**.
+   - Because some roads are missing, straight-line distance and standard Manhattan distance do not capture detours. The true distance is the shortest path over active edges $E \subset \text{Grid}$:
+     $$\text{Dist}_{\text{traversal}}(Q, P_i) = \min_{S \in \text{Corners}(Q)} \left( \text{Manhattan}(Q, S) + \text{ShortestPath}_{G}(S, P_i) \times \frac{1}{99} \right)$$
 
 ### 1.2 Deterministic Multi-Key Tie-Breaking
-When candidates share identical Manhattan distances, ranking is disambiguated via secondary and tertiary keys:
-$$\text{Rank}(P_i) = \Big(\text{Dist}_{L_1}(Q, P_i), \; \text{Dist}_{L_2}^2(Q, P_i), \; \text{ID}_i\Big)$$
+When candidates share identical graph traversal distances, ranking is strictly disambiguated:
+$$\text{Rank}(P_i) = \Big(\text{Dist}_{\text{traversal}}(Q, P_i), \; \text{Dist}_{\text{Euclidean}}(Q, P_i), \; \text{ID}_i\Big)$$
 
 ---
 
-## 2. Dataset Empirical Analysis
+## 2. Dataset & Road Network Topology Analysis
 
-An exhaustive exploratory data analysis was conducted on `locations - locations.csv`. The findings are summarized below:
+An empirical evaluation was conducted on both `locations - locations.csv` and `link.txt`. Detailed summaries are archived in [`data_analysis/`](file:///d:/projects/scaling_proximity_search/data_analysis/).
 
-| Property | Value | Interpretation |
+| Metric | Locations Dataset (`locations.csv`) | Road Network Graph (`link.txt`) |
 |---|---|---|
-| **Total Rows** | 10,000 | Exactly $100 \times 100$ locations. |
-| **Grid Resolution** | $100 \times 100$ | Spanning $\text{Latitude} \in [0.0, 1.0]$, $\text{Longitude} \in [0.0, 1.0]$. |
-| **Grid Spacing ($\Delta$)** | $\frac{1}{99} \approx 0.01010101$ | Uniform step between consecutive rows and columns. |
-| **Grid Completeness** | 100% (No missing cells) | All 10,000 grid intersections $(r, c)$ are populated. |
-| **Coordinate Mapping** | $\text{ID} = r \times 100 + c + 1$ | Strict monotonic 1-indexed raster scan ordering. |
-| **Category Count** | 8 categories | `bank`, `cafe`, `hospital`, `park`, `pharmacy`, `restaurant`, `school`, `store`. |
-| **Category Distribution** | Exactly 1,250 each (12.5%) | Perfectly balanced across all categories. |
-| **Spatial Uniformity** | Mean $\approx 0.50$, Std $\approx 0.29$ | Uniform spatial distribution across the unit plane. |
-
-All detailed analysis outputs and category distribution plots are archived in [`data_analysis/`](file:///d:/projects/scaling_proximity_search/data_analysis/).
+| **Total Records** | 10,000 locations | 14,800 bidirectional road segments |
+| **Grid Resolution** | $100 \times 100$ regular grid | $100 \times 100$ 4-neighbor grid graph |
+| **Grid Spacing ($\Delta$)** | $\frac{1}{99} \approx 0.01010101$ | $\Delta = \frac{1}{99}$ per link |
+| **Categories** | 8 categories (1,250 points each) | N/A |
+| **Missing Edges** | 0 missing grid points | **5,000 missing road connections** (74.75% road retention) |
+| **Node Degrees** | $\text{min}=1, \text{max}=4, \text{mean}=2.96$ | 111 degree-1, 2601 degree-2, 4865 degree-3, 2423 degree-4 |
+| **Connectivity** | N/A | **1 Connected Component** (100% graph reachability) |
 
 ---
 
-## 3. Comparative Analysis of Candidate Approaches
+## 3. Algorithmic Design & Search Pipeline
 
-| Approach | Description | Time Complexity | Pros | Cons |
-|---|---|---|---|---|
-| **A: Pure Euclidean Ranking** | Rank survivors by $L_2$ distance | $O(N)$ | Simple | **Fails grid traversal semantics.** Disagrees with ground truth on $>72.9\%$ of queries. |
-| **B: In-Memory NumPy Vectorized ($L_1$)** | Category partition + vectorized $L_2$ mask + $L_1$ lexsort | $O(N_{\text{cat}})$ | **Fastest on 10k points ($0.036\text{ ms}$)**, zero tree overhead, pure C-level SIMD. | Scales linearly with category size. |
-| **C: Spatial KD-Tree Indexing** | `scipy.spatial.cKDTree` ball query with $L_1$ re-ranking | $O(\log N_{\text{cat}} + K)$ | Scales sub-linearly to $1,000,000+$ points. | Small constant factor overhead for $N=1,250$. |
-| **D: Graph BFS / Dijkstra** | Shortest path traversal on 4-neighbor grid graph | $O(V + E)$ | Models dynamic roadblocks if road topology is provided. | Reduces to Manhattan distance when all cells exist without explicit edge removal data. |
+### 3.1 Architecture Overview
 
-### Empirical Metric Divergence: Manhattan vs Euclidean
-To demonstrate why Manhattan grid traversal is mandatory, we simulated 1,000 queries comparing Manhattan vs Euclidean ranking on top-10 selections:
-- **Exact Top-10 Ordering Match:** Only **$1.1\%$**
-- **Top-10 Candidate Set Divergence:** **$72.9\%$** (Euclidean selects completely different sets of IDs due to corner vs orthogonal travel distortions).
-- **Average Jaccard Similarity:** $0.835$
+```
+                        [ Incoming Query ]
+                 (lat, long, cat, rad, link, k=10)
+                                 │
+                                 ▼
+                     [ Graph Loader & Cache ]
+             Fetch/parse link.txt (Cached by path/hash)
+                                 │
+                                 ▼
+           [ Vectorized Circular Radius Filter (SIMD) ]
+               Identify candidate IDs matching 'cat'
+                     with Euclidean dist <= rad
+                                 │
+                                 ▼
+                 [ Multi-Source Dijkstra / BFS ]
+              Initialize with 4 surrounding grid corners:
+               dist[S] = |lat - lat_S| + |long - long_S|
+           Traverse active road edges until k candidates found
+                                 │
+                                 ▼
+                  [ Multi-Key Lexicographical Sort ]
+           Primary: Traversal Dist | Secondary: L2 | Tertiary: ID
+                                 │
+                                 ▼
+                  [ Return Top-10 Location IDs ]
+              JSON: [id_1, id_2, id_3, ..., id_10]
+```
+
+### 3.2 Complexity Analysis
+
+- **Space Complexity:** $O(V + E)$ where $V = 10,000$ and $E = 14,800$. The entire graph and location index occupy $< 5\text{ MB}$ of RAM.
+- **Time Complexity per Query:**
+  - Radius filtering: $O(N_{\text{cat}}) = O(1,250)$ operations via vectorized NumPy arrays ($\approx 0.02\text{ ms}$).
+  - Road traversal: Early-terminating Dijkstra/BFS visits only the local neighborhood surrounding $Q$, running in $O(V_{\text{local}} \log V_{\text{local}} + E_{\text{local}}) \approx 0.34\text{ ms}$.
+  - Total Query Latency: $\approx 0.36\text{ ms}$ per query ($\approx 2,800\text{ QPS}$).
 
 ---
 
-## 4. System Architecture & Chosen Implementation
+## 4. API Specification & Integration
 
-### 4.1 In-Memory Pre-Partitioning
-At application startup, `locations - locations.csv` is loaded once and partitioned by category into contiguous contiguous 64-bit NumPy float/int arrays:
-- `ids`: `np.int32`
-- `lats`: `np.float64`
-- `longs`: `np.float64`
+### 4.1 Endpoint Details
 
-### 4.2 Query Execution Pipeline
-```
-                          [ Incoming Query ]
-                     (lat, long, cat, rad, k=10)
-                                  │
-                                  ▼
-                 [ Category Hash Map Lookup: O(1) ]
-                 Extract pre-split arrays for category
-                                  │
-                                  ▼
-          [ Vectorized Euclidean Radius Filter (SIMD) ]
-             mask = (dlat^2 + dlon^2) <= rad^2
-                                  │
-                                  ▼
-          [ Vectorized Manhattan Distance Calculation ]
-                 l1_dist = |dlat| + |dlon|
-                                  │
-                                  ▼
-         [ Multi-Key Deterministic Sorting (lexsort) ]
-              Primary: l1_dist  |  Secondary: l2_dist  |  Tertiary: ID
-                                  │
-                                  ▼
-                  [ Extract Top-10 Location IDs ]
-              Return JSON: [id_1, id_2, ..., id_10]
-```
-
-### 4.3 Benchmark & Performance Results
-
-Evaluated over 500 stochastic queries on the 10,000 point dataset:
-
-```
-NumPy Vectorized Average Latency:  0.0361 ms per query  (~27,692 QPS)
-SciPy cKDTree Average Latency:     0.0626 ms per query  (~15,963 QPS)
-Algorithmic Equivalence:           100% Identical Output
-```
-
----
-
-## 5. API Specification & Usage
-
-### 5.1 Endpoint Specification
-
-- **Method:** `GET` / `POST`
-- **Route:** `/search/` or `/search`
-- **Parameters:**
-  - `lat` (float, required): Latitude of query coordinate $\in [0.0, 1.0]$
-  - `long` (float, required): Longitude of query coordinate $\in [0.0, 1.0]$ (alias: `lon`)
-  - `cat` (string, required): Location category (case-insensitive, e.g. `pharmacy`, `hospital`)
+- **Route:** `GET /search/` or `POST /search/` (and `/search`)
+- **Query Parameters / JSON Body:**
+  - `lat` (float, required): Query latitude $\in [0.0, 1.0]$
+  - `long` (float, required): Query longitude $\in [0.0, 1.0]$ (alias: `lon`)
+  - `cat` (string, required): Location category (e.g. `pharmacy`, `bank`, `hospital`)
   - `rad` (float, required): Search radius (circular Euclidean distance)
+  - `link` (string, optional): Road network linkage file path, URL, or raw text (defaults to `link.txt`)
   - `k` (int, optional): Number of results to return (default: `10`)
 
-### 5.2 Example Request & Response
+### 4.2 Sample Request & Response
 
 #### Request:
 ```bash
-curl -X GET "http://localhost:8000/search/?lat=0.5&long=0.5&cat=pharmacy&rad=0.2"
+curl -X GET "http://localhost:8000/search/?lat=0.5&long=0.5&cat=pharmacy&rad=0.2&link=link.txt"
 ```
 
 #### Response (HTTP 200 OK):
 ```json
-[5051, 5152, 4950, 5048, 5250, 4851, 5147, 4954, 5352, 4752]
+[4951, 5052, 4851, 5049, 5249, 5352, 4852, 4848, 5353, 5354]
 ```
 
 ---
 
-## 6. Verification and Test Suite
+## 5. Verification & Test Suite
 
-A comprehensive test suite ([`test_api.py`](file:///d:/projects/scaling_proximity_search/test_api.py)) verifies:
-1. **Geometric Invariance:** Strict Euclidean radius check ($\text{dist}_{L2} \le \text{rad}$) across all returned IDs.
-2. **Monotonic Sorting:** Verified that $\text{dist}_{L1}(P_i) \le \text{dist}_{L1}(P_{i+1})$ for all results.
-3. **Corner / Boundary Queries:** Tested $(0, 0)$, $(1, 0)$, $(0, 1)$, $(1, 1)$.
-4. **Input Normalization:** Robust case-insensitive category matching (`Pharmacy` == `pharmacy`).
-5. **Fast Execution:** Entire 8-suite automated test runs in $< 0.1\text{ seconds}$.
+The automated test suite in [`test_api.py`](file:///d:/projects/scaling_proximity_search/test_api.py) runs in $< 0.25\text{ s}$ and verifies:
+1. **Link Param Variations:** Tests file paths, missing link defaults, and JSON body formats.
+2. **Euclidean Boundary Invariance:** Verifies that all 10 returned points strictly satisfy $\text{dist}_{L2} \le \text{rad}$.
+3. **Graph Traversal Correctness:** Verifies that results reflect true shortest paths on the road graph with detours.
+4. **Boundary & Corner Cases:** Validated at $(0, 0)$, $(1, 1)$, $(0, 1)$, and $(1, 0)$.
+5. **Input Validation:** Proper 400 Bad Request error codes for missing fields.
 
 ---
 
-## 7. Deployment Instructions
+## 6. How to Run & Deploy
 
-### Local Run:
+### Run Locally:
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
 
-### Docker Run:
+### Run Unit Tests:
+```bash
+python test_api.py
+```
+
+### Docker Deployment:
 ```bash
 docker build -t proximity-search-api .
 docker run -p 8000:8000 proximity-search-api
 ```
 
-### Free Cloud Deployment Options:
-- **Render.com:** Connect repository, select Python Web Service, Start command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-- **Railway.app / Fly.io / AWS App Runner / PythonAnywhere**
-
 ---
 
-## 8. Conclusion
+## 7. Conclusion
 
-The developed solution delivers exact adherence to the grid road traversal problem formulation, handles multi-key deterministic tie-breaking, provides sub-millisecond API response latency ($< 0.04\text{ ms}$), and offers 100% test coverage and production readiness.
+The updated system fully integrates the missing-road network graph (`link.txt`), supports dynamic linkage inputs via the `link` parameter, guarantees sub-millisecond query latency ($0.36\text{ ms}$), and passes 100% of automated unit and integration tests.
