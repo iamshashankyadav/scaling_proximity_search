@@ -250,4 +250,6 @@ if __name__ == "__main__":
     load_locations(CSV_FILE)
     if os.path.exists(DEFAULT_LINK):
         get_graph(DEFAULT_LINK)
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    port_num = int(os.environ.get("PORT", 5203))
+    uvicorn.run("main:app", host="0.0.0.0", port=port_num, reload=False)
+
