@@ -1,0 +1,575 @@
+=== PAGE 1 ===
+Computer Systems Design (CSD)
+Lab 7 Report
+Proximity Search API
+Recommending the 10 closest places by road distance
+Rishi Kharya
+ID: 12341790
+API link:http://10.1.75.79:5227/search/
+Fields:lat,long,cat,rad,link
+October 2026
+
+=== PAGE 2 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+Contents
+1 What the lab asked for 2
+2 Looking at the data first 2
+2.1 locations.csv . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 2
+2.2 link.txt . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 2
+3 Defining the distances 3
+3.1 Inside the radius . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 3
+3.2 Road distance . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 3
+3.3 Where the trip starts . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+3.4 Ties . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+3.5 Why the missing roads matter . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+4 The algorithm 4
+4.1 First, the straight forward version . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+4.2 The improved version . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+4.3 Why the answer is still correct . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 6
+4.4 How much work each version does . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+5 The API 7
+5.1 Request . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+5.2 Response . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+5.3 Code structure . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+6 How to test the API 8
+6.1 From a browser (URL) . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+6.2 From the terminal . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 9
+6.3 Common mistakes . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 10
+7 Testing 11
+8 Results 11
+8.1 Speed on the lab machine . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+8.2 Larger inputs . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 11
+8.3 Sample queries . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 12
+9 Assumptions and limitations 12
+10 Conclusion 12
+A The BFS code 14
+B Project files 14
+1
+
+=== PAGE 3 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+1 What the lab asked for
+The goal of this lab was to build a small web API that recommends places near a user. A request
+gives:
+•the user’s current position (lat,long),
+•a category such ascafeorbank(cat),
+•a search radius (rad),
+•a text file describing which roads exist between points on the map (link).
+The API must answer with the IDs of the 10 closest locations of that category. Two different
+distances are involved, and keeping them apart was the most important part of the whole task:
+•the radiusis a plain circle around the user, so it uses the straight-line distance;
+•closestmeans the distance you actually travel along the roads.
+Some roads between neighbouring points are missing, like in a real city. A place that looks close
+on the map can therefore be a long way round by road, and ranking by straight-line distance gives
+wrong answers.
+I assumed every grid road existed and ranked by Manhattan distance. Then thelink field was
+added, and later the TAs shared a samplelink.txt along with its exact format. This report
+describes the final version. The API still falls back to the old Manhattan behaviour if a request
+comes without a link file.
+2 Looking at the data first
+Before writing any search code I spent some time checking what the two input files actually look
+like. The right algorithm depends heavily on the shape of the data.
+2.1 locations.csv
+•10,000 rows with the columnsID, Latitude, Longitude, Category.
+• The points form an exact100×100grid on the unit square. Every coordinate is k/99
+rounded to six decimals (k= 0, . . . ,99), so neighbouring points are1/99≈0.010101apart.
+• IDs go row by row:ID = 100 ·row+ col + 1, whererowis the latitude index andcol
+the longitude index. Location 1 is at(0 ,0), location 100 at(0 ,1)and location 101 at
+(0.010101,0).
+• There are 8 categories (bank, cafe, hospital, park, pharmacy, restaurant, school, store) with
+exactly 1,250 locations each, scattered randomly over the grid.
+2.2 link.txt
+2
+
+=== PAGE 4 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+Each line describes one road:
+Longitude_A Latitude_A Longitude_B Latitude_B
+0.181818 0.909091 0.191919 0.909091
+The example line is a road between the points (lat 0.909091, long 0.181818) and (lat 0.909091,
+long 0.191919). Longitude comesfirsthere, the opposite of the CSV, which is easy to get wrong.
+The TAs also said that all points are on the grid, that there are no diagonal links, and that links
+only join neighbours. I checked this with a short script before relying on it (Table 1).
+Roads (lines) in the file 14,800
+Points that are not real locations 0
+Roads that do not join two grid neighbours 0
+Duplicate roads 0
+Possible neighbour roads on a full100×100grid 19,800
+Missing roads 5,000 (about 25%)
+Connected pieces of the road network 1
+Locations with 1 / 2 / 3 / 4 roads 111 / 2,601 / 4,865 / 2,423
+Table 1: What the sample link file contains.
+Two things followed from this check:
+1. Every road joins two neighbours, soevery road has the same length, one grid step.
+Road distance is simply a count of steps.
+2. The whole network is connected, so every location can be reached, although some only
+through long detours.
+3 Defining the distances
+3.1 Inside the radius
+A location is a valid answer only if
+√︂
+(lati−lat)2 + (long i−long)2 ≤rad.
+The radius is in the same units as the coordinates. I allow a tiny tolerance of10−9so that a point
+lying exactly on the circle is not thrown out because of floating-point rounding.
+3.2 Road distance
+I treat the map as a graph: every location is a node and every line of the link file is an edge. The
+road distance to a place is thenumber of steps on the shortest routeto it. The API reports
+it both asroad_stepsand asgrid_distance=steps×1/99.
+I chose to count steps instead of adding up coordinate differences on purpose. In the files, the gap
+between two neighbours comes out as either 0.010101 or 0.010102, only becausek/99was rounded
+to six decimals. The real spacing is the same everywhere. Adding up the rounded gaps would
+make some routes of equal length look a millionth of a unit longer, and floating-point error would
+then decide their order. Counting steps uses whole numbers, so two equally long routes really do
+compare as equal.
+3
+
+=== PAGE 5 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+3.3 Where the trip starts
+The user joins the road network at thenearest location(straight line). If (lat, long) is a grid
+point, which is the normal case, that is just the location at that point. The radius is still measured
+from the user’s exact position.
+3.4 Ties
+Many locations end up the same number of steps away. When that happens, thesmaller ID
+wins. This is what a plain stable sort over the CSV order would give, and it makes every answer
+deterministic.
+I also checked how much this choice matters. Over 600 random queries, other reasonable rules
+changed the set of 10 in about 43% of queries, almost always by one ID at the 10th place. Examples
+of such rules are using the straight-line distance as the tie-breaker, or taking places in whatever
+order a BFS happens to discover them. No rule can match every possible reference implementation,
+so I picked the one that is simplest to state and reproduce.
+3.5 Why the missing roads matter
+Figure 1 shows the idea on a small map. A real example fromlink.txt is the query (0.79798,
+0.20202, hospital, 0.2). Four of the ten hospitals that are closest on a full grid (7320, 7322, 7916
+and 8118) drop out, because missing roads make their routes longer than those of 7727, 7828, 8226
+and 8621. With a straight-line or Manhattan ranking, four of the ten answers would be wrong.
+missing
+1 2 3 4
+5 6 7 8
+9 10 11 12
+13 14 15 16
+1 3
+13
+0 1
+1 2
+2
+3
+3
+4
+road in the link file
+the missing road
+no road
+user (start)
+cafe
+3 road steps from the user
+Figure 1: A4×4example. On a full grid, cafe 3 is 2 steps from the user and cafe 13 is 3, so
+a straight-line or Manhattan ranking puts 3 first. Because road 2–3 is missing, the real route
+1→2→6→7→3takes 4 steps, so cafe 13 is actually the closer one. This exact map is also one
+of my test cases.
+4 The algorithm
+4.1 First, the straight forward version
+I first wrote the most obvious version, mostly so I would have something to check the faster one
+against:
+1. read the link file and build the road graph;
+4
+
+=== PAGE 6 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+2. scan all 10,000 locations to find the one nearest the user;
+3. run a breadth-first search (BFS) from there over the whole map;
+4. scan all 10,000 locations again, keep the ones of the right category inside the radius, sort
+them by steps and return the first 10.
+It gives correct answers, but it repeats all of this work on every query. It takes about66 ms per
+queryon the lab machine, and most of that time is wasted. The road graph is the same for every
+query that sends the same file, and we only need the 10 closest places, which are all near the user.
+We never need to look at the far side of the map.
+4.2 The improved version
+I kept the same steps but made each one do only the work it really needs. BFS on a grid is
+standard, and splitting a map into squares so you don’t have to check every point is a common
+trick.
+1. Build the road graph only once per link file.The graph is an adjacency list: a dictionary
+from location ID to the list of its neighbours. To turn the coordinates in the file into IDs, I use
+another dictionary from the rounded(lat,long)pair to the location, so every line is just two
+lookups. The finished graph is cached, keyed by a SHA-1 hash of the file’s contents. When the
+same file arrives with the next query, nothing has to be parsed again.
+2. Find the start point with a dictionary lookup.The same coordinate dictionary gives
+the location under the user in one step. Only if the user is somewhere between grid points do I
+fall back to searching nearby cells (step 3) for the nearest location.
+3. Find the candidates with a bucket grid.At startup the unit square is cut into17×17
+equal cells (side1/17≈0.059), which puts about 4 locations of each category in each cell. Each
+category gets its own dictionary from cell to the locations in it. To collect the places inside the
+radius, I start at the user’s cell and walk outwards ring by ring (Figure 2). Anything in ringr is
+more than( r−1)cell widths away from the user, so once(r−1)×cell size is larger than the
+radius, no later ring can contain a valid place and the walk stops. This way only cells near the
+user are ever looked at.
+ring 0
+ring 1
+ring 2
+ring 3
+ring 4: never visited
+user, with the search circle
+Figure 2: The bucket grid. The walk visits the user’s cell (ring 0), then the cells around it (ring
+1), and so on. With the radius shown (2.4 cell widths), everything in ring 4 is more than 3 cell
+widths away, so the walk stops after ring 3.
+5
+
+=== PAGE 7 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+4. Run a BFS that stops as soon as the answer is known.BFS reaches locations in order
+of their step count: all places 1 step away, then all places 2 steps away, and so on. I process one
+whole step level at a time. Once I have at least 10 valid places after finishing a level, I can stop,
+because everything not yet visited is at least one step further away. Finishing the whole level
+before stopping also means that ties at the 10th place are decided by ID and not by the order the
+BFS happened to find them in. Algorithm 1 puts the four steps together.
+Algorithm 1Finding thekclosest locations by road (k= 10)
+Require:user position(lat,long), categoryc, radiusr, link fileF
+1:G←road graph ofF ▷taken from the cache ifFwas seen before
+2:s←location at (or nearest to)(lat,long)
+3:V←locations of categorycwithin straight-line distancer ▷bucket grid
+4:answers←[ ],seen←{s},level←[s],steps←0
+5:whilelevelis not emptyandsome location ofVis not reached yetdo
+6:foreachuinlevel, in increasing ID orderdo
+7:ifu∈Vthen
+8:append(steps, u)toanswers
+9:end if
+10:end for
+11:if|answers|≥kthen
+12:break▷everything unvisited is further away
+13:end if
+14:next←[ ]
+15:foreachuinleveldo
+16:foreach neighbourwofuinGdo
+17:ifw /∈seenthen
+18:addwtoseenand tonext
+19:end if
+20:end for
+21:end for
+22:level←next,steps←steps+ 1
+23:end while
+24:returnthe firstkentries ofanswers
+Places outside the circle are still walked through, because a road can leave the circle and come
+back in. They are just never returned as answers. The actual Python code for the BFS is in
+Appendix A, and it is only about 20 lines.
+4.3 Why the answer is still correct
+• BFS visits all places at stepd before any place at stepd + 1. When it stops after leveld
+with 10 or more answers, every unvisited place is at leastd + 1steps away, so it cannot beat
+or tie any answer already found.
+•Within one level the answers are sorted by ID, which is exactly the tie rule.
+•The bucket grid only skips cells whose nearest possible point is already outside the circle.
+I did not rely on this reasoning alone. The tests compare the fast version with the straightforward
+one on hundreds of random queries (Section 7).
+6
+
+=== PAGE 8 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+4.4 How much work each version does
+Let N be the number of locations,E the number of roads, andV′the number of places closer
+than the 10th answer.
+Step Straightforward version Improved version
+Build the road graphO(E)on every queryO(E)once per link file
+Find the start pointO(N)O(1)
+Find the candidatesO(N)only the cells near the circle
+Road searchO(N+E), the whole mapO(V ′+E′), only up to the 10th answer
+Table 2: Work per query.
+In practice V′is tiny. Over 2,000 random queries onlink.txt, the BFS reached 90 locations on
+average and never more than 209, out of 10,000.
+I think this is close to the best that is possible here. To be sure about the 10 nearest places,
+any correct method has to look at every location closer than the 10th answer, since a missing or
+present road anywhere in that area could change the result, and the early-stopping BFS looks at
+exactly that area. Precomputing all distances in advance is not an option: the road file arrives
+with the query and can be different each time, and a full table would need10,000×10,000 = 100
+million entries. Dijkstra’s algorithm is not needed either, because every road has the same length,
+and plain BFS is faster.
+5 The API
+5.1 Request
+The route is/search/ (/search without the slash also works), and it accepts both GET and
+POST.
+Field Meaning Example
+latuser’s latitude0.505051
+longuser’s longitude0.505051
+catcategory (case does not matter)cafe
+radsearch radius, in coordinate units0.2
+linkthe road filelink.txt
+koptional, number of results (default 10)10
+Table 3: Request fields.
+Since the assignment only says thatlink is a txt file, the API accepts it in several forms: as an
+uploaded file (the usual way), as the name of a file already on the server, as a URL to the file, or
+as the text itself. Section 6 shows step by step how to call the API from a browser and from the
+terminal.
+5.2 Response
+The answer is JSON. Theids field holds the 10 IDs, closest first. The rest is there to make the
+result easy to check: the start location, statistics about the link file, and the step count and both
+distances for every result. A trimmed real response:
+7
+
+=== PAGE 9 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+{
+"ids": [5051, 5053, 5251, 4949, 5154, 4751, 5149, 4653, 4748, 5047],
+"count": 10,
+"query": {"lat": 0.505051, "long": 0.505051, "cat": "cafe", "rad": 0.2},
+"start_location": {"id": 5051, "category": "cafe", ...},
+"link_file": {"source": "uploaded file ’link.txt’", "roads": 14800,
+"lines_with_unknown_points": 0, ...},
+"results": [
+{"id": 5051, "road_steps": 0, "grid_distance": 0.0, ...},
+{"id": 5053, "road_steps": 2, "grid_distance": 0.020202, ...},
+...
+],
+"search_time_ms": 1.771
+}
+Bad input gets an HTTP 400 reply with a shorterror message. That covers a missing field, a
+value that is not a number, a negative radius, an unknown category, and a link file that cannot be
+read or has no usable lines. If fewer than 10 valid places can be reached, the API returns the ones
+it found and adds anote.
+5.3 Code structure
+The code is written in Python 3 using Flask, and is split into three files:
+•proximity.py loads the CSV and holds the bucket grid (candidates, nearest location and
+the no-link Manhattan search);
+•roads.pyreads the link file into the road graph and runs the BFS;
+•app.py handles the HTTP side: reading the fields, accepting the link file in its different
+forms, caching, and building the response.
+6 How to test the API
+There are two easy ways to try the API: type a URL into a browser, or send the request from a
+terminal. Both go through10.1.75.79:5227, so they work from any machine on the lab network.
+I used both while testing, and every command below was run against the deployed server before I
+put it in this report.
+6.1 From a browser (URL)
+Paste this into the address bar of any browser (it is one line):
+http://10.1.75.79:5227/search/?lat=0.505051&long=0.505051&cat=cafe&rad=0.2&link=link.txt
+8
+
+=== PAGE 10 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+Part of the URL Meaning
+http://10.1.75.79:5227lab host and the forwarded port of my container
+/search/the route asked for in the assignment
+lat=0.505051,long=0.505051the user’s position
+cat=cafethe category to look for
+rad=0.2the search radius
+link=link.txtuse the copy of the TAs’link.txtthat is on the server
+Table 4: The parts of the test URL. The fields are joined with&.
+The browser shows the JSON reply. Firefox formats it nicely, while Chrome shows it as one long
+line. The answer is theidslist at the top, which for this URL should be:
+"ids": [5051, 5053, 5251, 4949, 5154, 4751, 5149, 4653, 4748, 5047]
+Any of the values can be changed directly in the address bar, for examplecat=bank or rad=0.15.
+Uploading your own link file with Postman.A tool such as Postman can send the same
+request and attach a file as well. Set the method toPOSTwith the URLhttp://10.1.75.79:
+5227/search/, openBody→form-data, and addlat, long, cat and rad asTextrows. For the
+link row, switch the type fromTexttoFile, pick link.txt from your computer and clickSend.
+This is the same kind of request ascurl -F in the next subsection. The reply should show the
+same 10 IDs, and underlink_file it should say "source": "uploaded file ’link.txt’" ,
+which confirms the server used the file you sent and not its own copy. Choosingbinaryin the
+Body tab also works, with the other four fields in theParamstab; the reply then says"source":
+"request body".
+A browser can only put text into a URL; it cannot attach a file. That is why the browser test
+names a file that is already on the server (link=link.txt), or gives the web address of a txt file.
+To test with adifferentlink file, use the terminal.
+A few other URLs are useful while testing:
+•http://10.1.75.79:5227/ shows a short usage page with the fields, the categories and the
+link files on the server;
+•http://10.1.75.79:5227/health replies {"status": "ok", ...} when the server is up;
+• a wrong value, such ascat=airport, returns an error message (HTTP 400) that lists the
+valid categories;
+• leaving outlink makes the API assume every grid road exists, and thegrid_distance field
+in the reply says so.
+6.2 From the terminal
+Open a terminal in the folder that containslink.txt.
+1. The same request as the browser, with curl.The quotes around the URL are needed,
+otherwise the shell cuts the URL at the first&.
+curl \
+"http://10.1.75.79:5227/search/?lat=0.505051&long=0.505051&cat=cafe&rad=0.2&link=link.txt"
+9
+
+=== PAGE 11 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+2. Uploading a link file with the request.-F sends each field as a form field, and@link.txt
+tells curl to attach the filelink.txt from the current folder. To test another road file, just change
+the name after the@.
+curl -F lat=0.505051 -F long=0.505051 -F cat=cafe -F rad=0.2 \
+-F link=@link.txt http://10.1.75.79:5227/search/
+3. Making the output easier to read.The reply is one long line of JSON. Piping it into
+Python either formats it or prints only the IDs:
+# whole reply, nicely formatted
+curl -F lat=0.505051 -F long=0.505051 -F cat=cafe -F rad=0.2 \
+-F link=@link.txt http://10.1.75.79:5227/search/ | python3 -m json.tool
+# only the 10 IDs
+curl -F lat=0.252525 -F long=0.747475 -F cat=bank -F rad=0.15 \
+-F link=@link.txt http://10.1.75.79:5227/search/ \
+| python3 -c "import sys, json; print(json.load(sys.stdin)[’ids’])"
+# prints [2376, 2176, 2673, 2278, 2581, 1976, 3077, 1874, 1876, 1977]
+4. From a Python script.This needs the requests package (pip install requests ). The
+script tests both ways of sending the link file:
+importrequests
+url = "http://10.1.75.79:5227/search/"
+fields = {"lat": 0.505051, "long": 0.505051, "cat": "cafe", "rad": 0.2}
+# 1. upload link.txt with the request
+with open("link.txt", "rb")asf:
+reply = requests.post(url, data=fields, files={"link": f})
+print(reply.status_code, reply.json()["ids"])
+# 2. use the copy of link.txt that is already on the server
+reply = requests.get(url, params={**fields, "link": "link.txt"})
+print(reply.status_code, reply.json()["ids"])
+Both lines print200 [5051, 5053, 5251, 4949, 5154, 4751, 5149, 4653, 4748, 5047].
+6.3 Common mistakes
+Mistake What happens
+No quotes around the URL in the
+terminal
+The shell cuts the URL at the first &, so only lat ar-
+rives and the API replies{"error": "missing parameter
+’long’"}.
+Using port 5000 or the container
+IP 172.17.0.28
+No connection. From outside, the API is only reachable as
+10.1.75.79:5227.
+Wrong file name after@in curl curl stops with Failed to open/read local data from
+file. Check the path, or run curl from the folder that
+has the file.
+Unknown category or a negative
+radius
+HTTP 400 with a message saying what is wrong.
+Table 5: Mistakes I ran into or tried on purpose while testing.
+10
+
+=== PAGE 12 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+7 Testing
+• Fast version vs straightforward version.300 random queries on the reallink.txt
+gave exactly the same IDs, in the same order, as a full BFS over the whole map followed by
+a sort. 240 more queries on generated road networks with 0%, 10%, 30% and 50% of the
+roads removed also matched.
+• Small hand-made maps.These cover the detour of Figure 1, a place with no roads (never
+returned), a user standing between grid points (starts at the nearest one), and two places at
+the same step count (smaller ID wins).
+• Reading the link file.Longitude-first order, header lines, commas instead of spaces,
+reversed duplicate roads, a road from a point to itself, points that are not on the grid, and
+0.20202written as0.202020.
+• Bucket grid.3,000 random queries against a scan of all 10,000 locations, plus separate
+checks of the nearest-location and inside-the-radius lookups.
+• HTTP.File upload, server file name, URL, every kind of bad input (all must give a 400),
+and a file name like../../etc/passwd, which must be refused.
+Finally, I called the deployed API from my laptop through10.1.75.79:5227 using a browser,
+curl and Pythonrequests, with the commands from Section 6. O
+8 Results
+8.1 Speed on the lab machine
+I measured each step on sys3 over 300 random queries withlink.txt.
+Step Time How often
+Parselink.txtand build the graph 118 ms once per new link file
+SHA-1 of the received file (cache check) 0.9 ms per request that sends a file
+Find the start point 0.001 ms per query
+Find the candidates inside the radius 0.10 ms per query
+Early-stopping BFS 0.035 ms per query
+Whole search 0.14 msper query (99th percentile 0.31 ms)
+Straightforward version 66 ms per query, about 460 times slower
+Table 6: Time per step on sys3. Both versions returned the same answers on all 60 queries
+compared.
+Measured from my laptop, a whole HTTP request takes about 8 ms when the server’s copy of
+link.txt is used. When the 530 KB file is uploaded with every request, it takes about 50 ms,
+which is mostly the time spent sending the file over the network. The search itself is no longer the
+slow part.
+8.2 Larger inputs
+To see how the approach scales, I also ran it on generated grids (on my laptop, with user positions
+placed randomly anywhere in the square).
+11
+
+=== PAGE 13 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+Data Ours (mean / p99) Plain version Speed-up
+link.txt, 10,000 locations 0.22 / 0.41 ms 2.0 ms (full BFS) 9×
+250,000 locations, 25% roads removed 3.7 / 68 ms 89 ms (full BFS) 24×
+1,000,000 locations, no link file 0.08 / 0.12 ms 89 ms (full scan) 1,100×
+Table 7: Scaling. In every case the fast and the plain version gave the same answers.
+8.3 Sample queries
+These uselink.txt. The number in brackets is the number of road steps.
+Query (lat, long; cat,
+rad)
+Start Returned IDs (road steps)
+0.505051, 0.505051
+cafe, 0.2
+5051 5051 (0), 5053 (2), 5251 (2), 4949 (3), 5154 (4), 4751 (5),
+5149 (5), 4653 (6), 4748 (6), 5047 (6)
+0.252525, 0.747475
+bank, 0.15
+2575 2376 (3), 2176 (5), 2673 (5), 2278 (6), 2581 (6), 1976 (7),
+3077 (7), 1874 (8), 1876 (8), 1977 (8)
+0.79798, 0.20202
+hospital, 0.2
+7921 7919 (2), 8224 (6), 8219 (7), 8119 (8), 8226 (8), 7726 (9),
+7827 (9), 8621 (9), 7727 (10), 7828 (10)
+0.5, 0.5
+school, 0.1
+4950 4750 (2), 4650 (3), 5250 (3), 4649 (4), 4651 (4), 4652 (5),
+4449 (6), 5451 (6), 4945 (7), 4350 (8)
+Table 8: Results for a few queries.
+The first query shows the difference between the two distances nicely. Cafe 5149 is only 0.023
+away in a straight line but needs 5 road steps, while cafe 5053 is 0.020 away and needs only 2.
+The answer here also does not depend on the tie rule. Of the 152 cafes inside the radius, 7 are
+within 5 steps, exactly 3 are at 6 steps, and the next one is at 7, so the 10th place is not shared.
+9 Assumptions and limitations
+• Link lines are read asLongitude_A Latitude_A Longitude_B Latitude_B , as the TAs
+specified. Roads work in both directions and each one is one grid step long.
+• The trip starts at the location nearest the user, but the radius is measured from the user’s
+exact position.
+•A place that cannot be reached by road is not a valid answer.
+• Ties are broken by the smaller ID. If the reference answers used a different tie rule, a query
+with a tie at the 10th place could differ by one ID.
+•radis in coordinate units (the1×1grid), not in kilometres.
+• A very large link file should be uploaded or sent by URL rather than pasted into a GET
+URL.
+10 Conclusion
+The final API returns the 10 closest locations of a category byroaddistance while filtering by
+straight-lineradius, which is what the lab asked for. The main points were to look at the data
+carefully first, to treat the link file as a graph with equal-length roads, and then to make every
+12
+
+=== PAGE 14 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+step only as large as it needs to be. With the graph built once per file, a bucket grid to find
+nearby candidates, and a BFS that stops at the 10th answer, a query takes about 0.14 ms on the
+lab machine instead of 66 ms. The answers stay identical to the straightforward version. The API
+is running athttp://10.1.75.79:5227/search/.
+13
+
+=== PAGE 15 ===
+CSD Lab 7: Proximity Search API Rishi Kharya (12341790)
+A The BFS code
+This is the search method fromroads.py, exactly as it runs on the server.
+defclosest(self, start_id, targets, k):
+"""
+Breadth-first search from start_id, one step at a time. Returns up to k
+(steps, id) pairs for ids in ‘targets‘, fewest steps first and the
+smaller id first on a tie. Stops after the step count at which the
+k-th answer was found, since nothing further away can get in.
+"""
+seen = {start_id}
+level = [start_id]
+steps = 0
+found = []
+left =len(targets)
+whilelevelandleft:
+hits =sorted(nodefornodeinlevelifnodeintargets)
+found.extend((steps, node)fornodeinhits)
+left -=len(hits)
+if len(found) >= k:
+break
+next_level = []
+fornodeinlevel:
+forneighbourinself.adjacency.get(node, ()):
+ifneighbournot inseen:
+seen.add(neighbour)
+next_level.append(neighbour)
+level = next_level
+steps += 1
+returnfound[:k]
+B Project files
+File Purpose
+app.pyFlask app and the/search/route
+roads.pyreading the link file, road graph, BFS
+proximity.pyloading the CSV, bucket grid
+link.txt,locations.csvthe data from the TAs
+links/,make_links.pyextra generated road files for testing
+tests/the 37 automated tests
+benchmark.pythe timing measurements in this report
+run.shstarts the server with gunicorn on port 5000
+14
+
