@@ -1,0 +1,13 @@
+﻿venv
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.git
+.gitignore
+*.docx
+*.pptx
+*.log
+.pytest_cache
+data_analysis/*.png
