@@ -1,0 +1,30 @@
+﻿services:
+  proximity-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: scaling-proximity-api:latest
+    container_name: scaling-proximity-api
+    ports:
+      - "5203:5203"
+    environment:
+      - PORT=5203
+      - CSV_PATH=/app/locations - locations.csv
+      - LINK_PATH=/app/link.txt
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - "./locations - locations.csv:/app/locations - locations.csv:ro"
+      - "./link.txt:/app/link.txt:ro"
+    networks:
+      - proximity-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5203/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  proximity-network:
+    driver: bridge
